@@ -1,0 +1,17 @@
+name: xhs
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - requests
+  - fastapi
+  - uvicorn
+  - beautifulsoup4
+  - typer
+  - pip:
+    - google-cloud-aiplatform>=1.38
+    - db-dtypes
+    - anthropic
+    - notion-client==2.2.1
+
