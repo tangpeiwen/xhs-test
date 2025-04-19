@@ -44,13 +44,11 @@ def extract_xhs_content(pasted_text: str) -> Optional[Dict[str, Any]]:
 
         is_video = bool(soup.find("div", class_=["player-el"]))
         LOGGER.info(f"Is video: {is_video}")
+        
+        # 收集所有图片URL
         image_tags = soup.find_all("meta", attrs={"name": "og:image"})
         image_urls = [tag["content"] for tag in image_tags if "content" in tag.attrs]
-
-        # Process images to get downloadable content
-        processed_images = process_image_urls(image_urls) if image_urls else []
-        LOGGER.info(f"Processed {len(processed_images)} images")
-
+        
         # 尝试获取标题和描述
         title_tag = soup.find("meta", attrs={"name": "og:title"})
         title = title_tag["content"] if title_tag and "content" in title_tag.attrs else ""
@@ -62,7 +60,7 @@ def extract_xhs_content(pasted_text: str) -> Optional[Dict[str, Any]]:
         return {
             "type": "视频" if is_video else "图文", 
             "title": title, 
-            "images": processed_images, 
+            "images": image_urls,  # 直接返回URL列表，不处理为base64
             "description": description,
             "original_url": final_url
         }
