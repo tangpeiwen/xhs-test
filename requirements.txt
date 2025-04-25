@@ -3,4 +3,9 @@ uvicorn==0.24.0
 pydantic==2.4.2
 requests==2.31.0
 beautifulsoup4==4.12.2
-python-multipart==0.0.6 
+python-multipart==0.0.6
+firecrawl-py==0.1.0
+instagrapi==2.10.0
+notion-client==2.0.0
+python-dotenv==1.0.0
+cloudinary==1.33.0
