@@ -11,3 +11,4 @@ notion-client==2.2.1
 python-dotenv==1.0.0
 cloudinary==1.44.0
 weibo-api==0.0.4
+pillow==10.4.0
