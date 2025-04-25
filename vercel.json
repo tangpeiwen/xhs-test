@@ -11,11 +11,5 @@
       "src": "/(.*)",
       "dest": "api.py"
     }
-  ],
-  "functions": {
-    "api.py": {
-      "memory": 1024,
-      "maxDuration": 30
-    }
-  }
+  ]
 } 
