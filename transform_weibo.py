@@ -3,6 +3,7 @@ import logging
 from typing import Optional
 
 from bs4 import BeautifulSoup
+from weibo_api.client import WeiboClient
 
 LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -47,3 +48,36 @@ def extract_text_from_html(html_string: str) -> str:
     except Exception as e:
         LOGGER.error(f"Error extracting text from HTML: {str(e)}")
         return html_string
+
+
+def extract_weibo_content(url: str) -> Optional[str]:
+    """提取微博内容的主函数"""
+    try:
+        LOGGER.info(f"Processing Weibo URL: {url}")
+
+        # 提取微博ID
+        weibo_id = extract_weibo_id(url)
+        if not weibo_id:
+            return None
+
+        # 初始化微博客户端
+        client = WeiboClient()
+
+        # 获取微博内容
+        LOGGER.info(f"Fetching Weibo content for ID: {weibo_id}")
+        weibo_content = client.status(weibo_id).longTextContent
+
+        if not weibo_content:
+            LOGGER.error("Failed to fetch Weibo content")
+            return None
+
+        # 提取文本
+        LOGGER.info("Extracting text from Weibo content")
+        text = extract_text_from_html(weibo_content)
+
+        LOGGER.info(f"Successfully extracted Weibo content: {text[:100]}...")
+        return text
+
+    except Exception as e:
+        LOGGER.error(f"Error in extract_weibo_content: {str(e)}")
+        return None
