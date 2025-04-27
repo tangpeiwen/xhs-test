@@ -5,11 +5,15 @@ import urllib.parse
 from typing import Dict, Any, List, Optional, Union
 import dotenv
 from instagrapi import Client
-from instagrapi.exceptions import LoginRequired
+from instagrapi.exceptions import LoginRequired, ChallengeRequired, SelectContactPointRecoveryForm
+from instagrapi.mixins.challenge import ChallengeChoice
 import cloudinary
 import cloudinary.uploader
 from cloudinary.utils import cloudinary_url
 import json
+import time
+import imaplib
+import email
 
 dotenv.load_dotenv()
 
@@ -19,11 +23,121 @@ logger = logging.getLogger(__name__)
 
 # Cloudinary配置
 cloudinary.config( 
-    cloud_name = os.environ.get('CLOUDINARY_CLOUD_NAME'),
-    api_key = os.environ.get('CLOUDINARY_API_KEY'),
-    api_secret = os.environ.get('CLOUDINARY_API_SECRET'),
+    cloud_name = "dumwcxeui", 
+    api_key = "712717216572355", 
+    api_secret = "-sqH9W4PuUIii2L1yctPCqFitKU",
     secure = True
 )
+
+class CustomChallenge:
+    def __init__(self, username: str, email: str):
+        self.username = username
+        self.email = email
+        self.challenge_email = os.getenv("CHALLENGE_EMAIL")
+        self.challenge_password = os.getenv("CHALLENGE_PASSWORD")
+        
+    def challenge_code_handler(self, username: str, choice: ChallengeChoice) -> str:
+        """处理验证码请求"""
+        if choice == ChallengeChoice.EMAIL:
+            logger.info(f"Instagram请求邮箱验证码 - 用户: {username}")
+            verification_code = self.get_verification_code()
+            if verification_code:
+                return verification_code
+        return ""
+        
+    def get_verification_code(self) -> Optional[str]:
+        """从邮箱获取Instagram验证码"""
+        try:
+            code = self.get_code_from_email(self.username)
+            if code:
+                logger.info("成功获取验证码")
+                return code
+            logger.warning("未找到验证码")
+            return None
+        except Exception as e:
+            logger.error(f"获取验证码失败: {str(e)}")
+            return None
+
+    def get_code_from_email(self, username: str) -> Optional[str]:
+        """从Gmail邮箱中获取Instagram验证码"""
+        try:
+            # 连接Gmail
+            mail = imaplib.IMAP4_SSL("imap.gmail.com")
+            mail.login(self.challenge_email, self.challenge_password)
+            mail.select("inbox")
+
+            # 搜索未读邮件
+            result, data = mail.search(None, "(UNSEEN)")
+            if result != "OK":
+                logger.error(f"搜索邮件失败: {result}")
+                return None
+
+            email_ids = data[0].split()
+            if not email_ids:
+                logger.warning("没有找到未读邮件")
+                return None
+
+            # 遍历未读邮件
+            for num in reversed(email_ids):
+                # 标记为已读
+                mail.store(num, "+FLAGS", "\\Seen")
+                
+                # 获取邮件内容
+                result, data = mail.fetch(num, "(RFC822)")
+                if result != "OK":
+                    continue
+
+                email_body = data[0][1]
+                email_message = email.message_from_bytes(email_body)
+
+                # 处理邮件内容
+                code = self._extract_code_from_email(email_message, username)
+                if code:
+                    return code
+
+            return None
+
+        except Exception as e:
+            logger.error(f"处理邮件时出错: {str(e)}")
+            return None
+        finally:
+            try:
+                mail.close()
+                mail.logout()
+            except:
+                pass
+
+    def _extract_code_from_email(self, email_message: email.message.Message, username: str) -> Optional[str]:
+        """从邮件内容中提取验证码"""
+        try:
+            # 获取邮件内容
+            if email_message.is_multipart():
+                for part in email_message.walk():
+                    if part.get_content_type() == "text/html":
+                        body = part.get_payload(decode=True).decode()
+                        break
+            else:
+                body = email_message.get_payload(decode=True).decode()
+
+            # 检查是否包含HTML内容
+            if "<div" not in body:
+                return None
+
+            # 查找包含用户名的部分
+            username_match = re.search(f">([^>]*?({username})[^<]*?)<", body)
+            if not username_match:
+                return None
+
+            # 提取6位数验证码
+            code_match = re.search(r">(\d{6})<", body)
+            if code_match:
+                return code_match.group(1)
+
+            return None
+
+        except Exception as e:
+            logger.error(f"提取验证码时出错: {str(e)}")
+            return None
 
 class InstagramScraper:
     def __init__(self, username: str = None, password: str = None, session_file: str = "instagram_session.json"):
