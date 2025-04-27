@@ -66,35 +66,64 @@ class CustomChallenge:
             mail.login(self.challenge_email, self.challenge_password)
             mail.select("inbox")
 
-            # 搜索未读邮件
-            result, data = mail.search(None, "(UNSEEN)")
+            # 使用组合搜索条件：未读 + 来自Instagram安全邮件
+            search_criteria = '(UNSEEN FROM "security@mail.instagram.com")'
+            result, data = mail.search(None, search_criteria)
+            
             if result != "OK":
                 logger.error(f"搜索邮件失败: {result}")
                 return None
 
             email_ids = data[0].split()
             if not email_ids:
-                logger.warning("没有找到未读邮件")
+                logger.warning("没有找到Instagram的未读验证码邮件")
                 return None
 
-            # 遍历未读邮件
+            # 遍历未读的Instagram邮件（从最新的开始）
             for num in reversed(email_ids):
-                # 标记为已读
-                mail.store(num, "+FLAGS", "\\Seen")
-                
-                # 获取邮件内容
-                result, data = mail.fetch(num, "(RFC822)")
-                if result != "OK":
+                try:
+                    # 标记为已读
+                    mail.store(num, "+FLAGS", "\\Seen")
+                    
+                    # 获取邮件内容
+                    result, data = mail.fetch(num, "(RFC822)")
+                    if result != "OK":
+                        continue
+
+                    email_body = data[0][1]
+                    email_message = email.message_from_bytes(email_body)
+
+                    # 确保是最近的邮件（可选：检查邮件日期）
+                    date_tuple = email.utils.parsedate_tz(email_message['Date'])
+                    if date_tuple:
+                        email_time = email.utils.mktime_tz(date_tuple)
+                        # 如果邮件超过5分钟，跳过
+                        if time.time() - email_time > 300:  # 5分钟 = 300秒
+                            logger.warning("跳过超过5分钟的旧邮件")
+                            continue
+
+                    # 处理邮件内容
+                    if email_message.is_multipart():
+                        for part in email_message.walk():
+                            if part.get_content_type() == "text/html":
+                                body = part.get_payload(decode=True).decode()
+                                # 查找验证码
+                                code = self._extract_verification_code(body, username)
+                                if code:
+                                    logger.info("成功从邮件中提取到验证码")
+                                    return code
+                    else:
+                        body = email_message.get_payload(decode=True).decode()
+                        code = self._extract_verification_code(body, username)
+                        if code:
+                            logger.info("成功从邮件中提取到验证码")
+                            return code
+
+                except Exception as e:
+                    logger.error(f"处理单个邮件时出错: {str(e)}")
                     continue
 
-                email_body = data[0][1]
-                email_message = email.message_from_bytes(email_body)
-
-                # 处理邮件内容
-                code = self._extract_code_from_email(email_message, username)
-                if code:
-                    return code
-
+            logger.warning("未在最近的Instagram邮件中找到验证码")
             return None
 
         except Exception as e:
@@ -107,18 +136,9 @@ class CustomChallenge:
             except:
                 pass
 
-    def _extract_code_from_email(self, email_message: email.message.Message, username: str) -> Optional[str]:
+    def _extract_verification_code(self, body: str, username: str) -> Optional[str]:
         """从邮件内容中提取验证码"""
         try:
-            # 获取邮件内容
-            if email_message.is_multipart():
-                for part in email_message.walk():
-                    if part.get_content_type() == "text/html":
-                        body = part.get_payload(decode=True).decode()
-                        break
-            else:
-                body = email_message.get_payload(decode=True).decode()
-
             # 检查是否包含HTML内容
             if "<div" not in body:
                 return None
@@ -131,7 +151,9 @@ class CustomChallenge:
             # 提取6位数验证码
             code_match = re.search(r">(\d{6})<", body)
             if code_match:
-                return code_match.group(1)
+                code = code_match.group(1)
+                logger.info(f"找到验证码: {code}")
+                return code
 
             return None
 
@@ -149,9 +171,34 @@ class InstagramScraper:
         """
         self.username = username or os.getenv("INSTAGRAM_USERNAME")
         self.password = password or os.getenv("INSTAGRAM_PASSWORD")
+        self.email = os.getenv("INSTAGRAM_EMAIL")  # 添加邮箱配置
         self.session_file = session_file
         self.client = Client()
         self.is_logged_in = False
+        
+        # 初始化challenge handler
+        self.challenge_handler = CustomChallenge(self.username, self.email)
+        self.client.challenge_code_handler = self.challenge_handler.challenge_code_handler
+        
+        # 设置设备信息
+        self.client.set_device({
+            "app_version": "269.0.0.18.75",
+            "android_version": 26,
+            "android_release": "8.0.0",
+            "dpi": "480dpi",
+            "resolution": "1080x1920",
+            "manufacturer": "OnePlus",
+            "device": "devitron",
+            "model": "ONEPLUS A3003",
+            "cpu": "qcom",
+            "version_code": "314665256"
+        })
+        
+        # 设置代理（如果有）
+        proxy = os.getenv("INSTAGRAM_PROXY")
+        if proxy:
+            self.client.set_proxy(proxy)
+            
         self._load_session()
 
     def _save_session(self):
@@ -187,7 +234,38 @@ class InstagramScraper:
         try:
             if not self.is_logged_in:
                 logger.info(f"尝试登录Instagram，用户名: {self.username}")
-                self.client.login(self.username, self.password)
+                try:
+                    # 尝试登录
+                    self.client.login(self.username, self.password)
+                except ChallengeRequired:
+                    logger.info("需要处理验证请求")
+                    # 获取challenge信息
+                    challenge = self.client.last_json.get("challenge", {})
+                    if not challenge:
+                        logger.error("无法获取challenge信息")
+                        return False
+                        
+                    try:
+                        # 选择邮箱验证方式
+                        self.client.challenge_resolve(challenge["api_path"])
+                        # 等待5秒，确保验证邮件已发送
+                        time.sleep(5)
+                        # 从邮箱获取验证码
+                        code = self.challenge_handler.get_verification_code()
+                        if not code:
+                            logger.error("无法获取验证码")
+                            return False
+                            
+                        # 提交验证码
+                        self.client.challenge_resolve(challenge["api_path"], code)
+                    except Exception as e:
+                        logger.error(f"处理验证请求失败: {str(e)}")
+                        return False
+                        
+                except SelectContactPointRecoveryForm:
+                    logger.error("需要选择验证方式，请手动处理")
+                    return False
+                
                 self.is_logged_in = True
                 self._save_session()  # 登录成功后保存session
                 logger.info("登录成功")
